@@ -329,7 +329,7 @@ def find_free_slots(service, duration, mission, search_start, search_end, max_re
 
 # ---- UI ----
 
-st.set_page_config(page_title="Boko Agent", page_icon="✈️", layout="centered")
+st.set_page_config(page_title="Boko Agent", page_icon="🃏", layout="centered")
 
 st.markdown("""
 <style>
@@ -468,7 +468,7 @@ st.markdown("""
 # Hero
 st.markdown("""
 <div class="hero">
-    <h1>✈️ Boko Agent</h1>
+    <h1>🃏 Boko Agent</h1>
     <p>מזהה חלונות זמן פנויים תוך התחשבות במשמרות מילואים</p>
 </div>
 """, unsafe_allow_html=True)
