@@ -504,12 +504,12 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
             </div>
             """, unsafe_allow_html=True)
 
-            if unavailable:
-                st.markdown("**מי לא יכול:**")
-                for name, reason in unavailable.items():
-                    st.markdown(f'<div class="unavail-item">❌ <b>{name}</b> — {reason}</div>', unsafe_allow_html=True)
-            else:
+            available_names = [name for name in FRIENDS if name not in unavailable] + ["אני"]
+            if len(unavailable) == 0:
                 st.markdown('<div class="avail-badge">✅ כולם פנויים!</div>', unsafe_allow_html=True)
+            else:
+                st.markdown("**מי יכול:**")
+                st.markdown(f'<div class="avail-badge">✅ {", ".join(available_names)}</div>', unsafe_allow_html=True)
 
             available_emails = [
                 email for name, email in FRIENDS.items()
