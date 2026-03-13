@@ -477,46 +477,55 @@ if search_btn:
             creds = get_credentials()
             service = build('calendar', 'v3', credentials=creds)
             slots = find_free_slots(service, duration, mission, search_start, search_end)
-
-            icon = get_activity_icon(mission)
-            total = len(FRIENDS) + 1
-            min_p = get_min_people(mission)
-
-            if slots:
-                st.markdown(f"<p style='color:#4fc3f7; font-size:1.1rem; font-weight:600; text-align:center;'>✅ מצאתי חלונות רלוונטיים</p>", unsafe_allow_html=True)
-                for i, (start_time, end_time, free_count, unavailable) in enumerate(slots, 1):
-                    start_str = start_time.astimezone().strftime('%A %d/%m ב-%H:%M')
-                    end_str = end_time.astimezone().strftime('%H:%M')
-
-                    st.markdown(f"""
-                    <div class="result-card">
-                        <h3>אופציה {i} {icon}</h3>
-                        <div class="result-time">{start_str} &nbsp;→&nbsp; {end_str}</div>
-                        <div class="result-count">👥 {free_count} מתוך {total} פנויים (מינימום {min_p})</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    if unavailable:
-                        st.markdown("**מי לא יכול:**")
-                        for name, reason in unavailable.items():
-                            st.markdown(f'<div class="unavail-item">❌ <b>{name}</b> — {reason}</div>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<div class="avail-badge">✅ כולם פנויים!</div>', unsafe_allow_html=True)
-
-                    available_emails = [
-                        email for name, email in FRIENDS.items()
-                        if name not in unavailable
-                    ]
-                    if st.button(f"📨 שלח זימון לאופציה {i}", key=f"invite_{i}"):
-                        try:
-                            event = create_calendar_event(service, mission, start_time, end_time, available_emails)
-                            st.success(f"✅ זימון נשלח ל-{len(available_emails)} אנשים!")
-                            st.markdown(f"[פתח את האירוע ב-Google Calendar]({event.get('htmlLink')})")
-                        except Exception as e:
-                            st.error(f"שגיאה בשליחת הזימון: {e}")
-
-                    st.markdown("<br>", unsafe_allow_html=True)
-            else:
-                st.markdown("<p style='color:#ff6b6b; text-align:center; font-size:1.1rem;'>❌ אין חלונות זמן רלוונטיים</p>", unsafe_allow_html=True)
+            st.session_state['results'] = slots
+            st.session_state['mission'] = mission
         except Exception as e:
             st.error(f"שגיאה: {e}")
+            st.session_state['results'] = []
+
+if 'results' in st.session_state and st.session_state['results'] is not None:
+    slots = st.session_state['results']
+    mission = st.session_state.get('mission', '')
+    icon = get_activity_icon(mission)
+    total = len(FRIENDS) + 1
+    min_p = get_min_people(mission)
+
+    if slots:
+        st.markdown(f"<p style='color:#4fc3f7; font-size:1.1rem; font-weight:600; text-align:center;'>✅ מצאתי חלונות רלוונטיים</p>", unsafe_allow_html=True)
+        for i, (start_time, end_time, free_count, unavailable) in enumerate(slots, 1):
+            start_str = start_time.astimezone().strftime('%A %d/%m ב-%H:%M')
+            end_str = end_time.astimezone().strftime('%H:%M')
+
+            st.markdown(f"""
+            <div class="result-card">
+                <h3>אופציה {i} {icon}</h3>
+                <div class="result-time">{start_str} &nbsp;→&nbsp; {end_str}</div>
+                <div class="result-count">👥 {free_count} מתוך {total} פנויים (מינימום {min_p})</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if unavailable:
+                st.markdown("**מי לא יכול:**")
+                for name, reason in unavailable.items():
+                    st.markdown(f'<div class="unavail-item">❌ <b>{name}</b> — {reason}</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="avail-badge">✅ כולם פנויים!</div>', unsafe_allow_html=True)
+
+            available_emails = [
+                email for name, email in FRIENDS.items()
+                if name not in unavailable
+            ]
+            if st.button(f"📨 שלח זימון לאופציה {i}", key=f"invite_{i}"):
+                try:
+                    creds = get_credentials()
+                    service = build('calendar', 'v3', credentials=creds)
+                    event = create_calendar_event(service, mission, start_time, end_time, available_emails)
+                    st.success(f"✅ זימון נשלח ל-{len(available_emails)} אנשים!")
+                    st.markdown(f"[פתח את האירוע ב-Google Calendar]({event.get('htmlLink')})")
+                    st.session_state['results'] = None
+                except Exception as e:
+                    st.error(f"שגיאה בשליחת הזימון: {e}")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+    elif slots == []:
+        st.markdown("<p style='color:#ff6b6b; text-align:center; font-size:1.1rem;'>❌ אין חלונות זמן רלוונטיים</p>", unsafe_allow_html=True)
