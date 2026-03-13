@@ -229,9 +229,12 @@ def create_calendar_event(service, mission, start_time, end_time, attendee_email
         sendUpdates='all'
     ).execute()
 
+EVENING_ONLY = ["בירה", "בר", "פוקר", "poker", "מסעדה", "ארוחת ערב", "אוכל", "ארוחה", "מסיבה"]
+
 def find_free_slots(service, duration, mission, search_start, search_end, max_results=7):
     """מוצא עד max_results חלונות פנויים."""
     is_poker = "פוקר" in mission.lower() or "poker" in mission.lower()
+    is_evening_only = any(kw in mission.lower() for kw in EVENING_ONLY)
     min_people = get_min_people(mission)
     all_people = list(FRIENDS.values()) + ["primary"]
     email_to_name = {v: k for k, v in FRIENDS.items()}
@@ -270,6 +273,14 @@ def find_free_slots(service, duration, mission, search_start, search_end, max_re
 
     while possible_start + datetime.timedelta(hours=duration) <= search_end and len(results) < max_results:
         local_start = possible_start.astimezone()
+
+        # פעילויות ערב רק אחרי 18:00
+        if is_evening_only and local_start.hour < 18:
+            next_evening = local_start.replace(hour=18, minute=0, second=0, microsecond=0)
+            if next_evening <= local_start:
+                next_evening += datetime.timedelta(days=1)
+            possible_start = next_evening.astimezone(datetime.timezone.utc)
+            continue
 
         # אין אירועים בין 01:00 ל-08:00
         if 1 <= local_start.hour < 8:
