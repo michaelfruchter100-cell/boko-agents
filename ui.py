@@ -231,6 +231,50 @@ def create_calendar_event(service, mission, start_time, end_time, attendee_email
 
 EVENING_ONLY = ["בירה", "בר", "פוקר", "poker", "מסעדה", "ארוחת ערב", "אוכל", "ארוחה", "מסיבה"]
 
+def analyze_shift_image(image_bytes, image_type, my_name):
+    """מנתח תמונת וואטסאפ ומחלץ משמרות מילואים."""
+    import anthropic
+    import base64
+    import json
+
+    api_key = st.secrets.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        raise Exception("ANTHROPIC_API_KEY לא הוגדר ב-Secrets")
+
+    client = anthropic.Anthropic(api_key=api_key)
+    image_data = base64.standard_b64encode(image_bytes).decode('utf-8')
+    today = datetime.datetime.now()
+
+    response = client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": image_type, "data": image_data}
+                },
+                {
+                    "type": "text",
+                    "text": f"""זוהי תמונת מסך מוואטסאפ עם סידור משמרות מילואים.
+חלץ את כל המשמרות שמשובצות עבור "{my_name}".
+השנה הנוכחית היא {today.year}.
+החזר JSON בלבד ללא טקסט נוסף:
+{{"shifts": [{{"date": "DD/MM/YYYY", "start_time": "HH:MM", "end_time": "HH:MM", "description": "תיאור"}}]}}
+אם אין משמרות עבור "{my_name}", החזר: {{"shifts": []}}"""
+                }
+            ]
+        }]
+    )
+
+    text = response.content[0].text.strip()
+    if '```' in text:
+        text = text.split('```')[1]
+        if text.startswith('json'):
+            text = text[4:]
+    return json.loads(text.strip())
+
 def find_free_slots(service, duration, mission, search_start, search_end, max_results=21):
     """מוצא עד max_results חלונות פנויים."""
     is_poker = "פוקר" in mission.lower() or "poker" in mission.lower()
@@ -553,3 +597,81 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
                             st.error(f"שגיאה: {e}")
     elif slots == []:
         st.markdown("<p style='color:#ff6b6b; text-align:center; font-size:1.1rem;'>❌ אין חלונות זמן רלוונטיים</p>", unsafe_allow_html=True)
+
+# ---- סעיף העלאת סידור מילואים ----
+st.markdown("<hr style='border-color:rgba(255,255,255,0.1); margin:2rem 0;'>", unsafe_allow_html=True)
+st.markdown("""
+<div style='text-align:center; padding:0.5rem 0 1rem 0;'>
+    <span style='color:#7c4dff; font-size:1.2rem; font-weight:700;'>📸 העלה סידור משמרות מהוואטסאפ</span><br>
+    <span style='color:#8892a4; font-size:0.9rem;'>העלה צילום מסך ואני אזהה את המשמרות שלך ואוסיף ללוז</span>
+</div>
+""", unsafe_allow_html=True)
+
+_, col_img, _ = st.columns([1, 10, 1])
+with col_img:
+    my_name = st.text_input("שמך כפי שמופיע בסידור", placeholder="לדוגמה: מיכאל, מיכי...", key="my_name_input")
+    uploaded_file = st.file_uploader("בחר תמונה", type=["jpg", "jpeg", "png"], key="shift_image")
+
+    if uploaded_file and my_name:
+        if st.button("🔍 נתח משמרות", type="primary", use_container_width=True, key="analyze_btn"):
+            with st.spinner("מנתח את הסידור..."):
+                try:
+                    image_bytes = uploaded_file.read()
+                    image_type = "image/jpeg" if uploaded_file.type == "image/jpeg" else "image/png"
+                    result = analyze_shift_image(image_bytes, image_type, my_name)
+                    st.session_state['detected_shifts'] = result.get('shifts', [])
+                except Exception as e:
+                    st.error(f"שגיאה בניתוח: {e}")
+
+if 'detected_shifts' in st.session_state and st.session_state['detected_shifts']:
+    shifts = st.session_state['detected_shifts']
+    st.markdown(f"<p style='color:#7c4dff; font-weight:600; text-align:center;'>✅ זיהיתי {len(shifts)} משמרות</p>", unsafe_allow_html=True)
+
+    HEB_DAYS2 = {0: "שני", 1: "שלישי", 2: "רביעי", 3: "חמישי", 4: "שישי", 5: "שבת", 6: "ראשון"}
+    for shift in shifts:
+        try:
+            d, m, y = shift['date'].split('/')
+            dt = datetime.datetime(int(y), int(m), int(d))
+            day_name = HEB_DAYS2[dt.weekday()]
+        except:
+            day_name = ""
+        st.markdown(f"""
+        <div style='background:rgba(124,77,255,0.08); border-right:3px solid #7c4dff;
+                    padding:0.5rem 1rem; margin:0.4rem 0; border-radius:8px; direction:rtl;'>
+            <span style='color:#7c4dff; font-weight:700;'>יום {day_name} {shift['date']}</span>
+            &nbsp;·&nbsp;
+            <span style='color:#fff;'>{shift['start_time']}–{shift['end_time']}</span>
+            &nbsp;·&nbsp;
+            <span style='color:#8892a4;'>{shift.get('description','משמרת מילואים')}</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if st.button("📅 הוסף את כל המשמרות ללוז", type="primary", use_container_width=True, key="add_shifts_btn"):
+        with st.spinner("מוסיף משמרות..."):
+            try:
+                creds = get_credentials()
+                service = build('calendar', 'v3', credentials=creds)
+                added = 0
+                for shift in shifts:
+                    d, m, y = shift['date'].split('/')
+                    start_dt = datetime.datetime(int(y), int(m), int(d),
+                                                  int(shift['start_time'].split(':')[0]),
+                                                  int(shift['start_time'].split(':')[1]),
+                                                  tzinfo=datetime.timezone(datetime.timedelta(hours=2)))
+                    end_dt = datetime.datetime(int(y), int(m), int(d),
+                                                int(shift['end_time'].split(':')[0]),
+                                                int(shift['end_time'].split(':')[1]),
+                                                tzinfo=datetime.timezone(datetime.timedelta(hours=2)))
+                    if end_dt <= start_dt:
+                        end_dt += datetime.timedelta(days=1)
+                    event = {
+                        'summary': f"🪖 {shift.get('description','משמרת מילואים')}",
+                        'start': {'dateTime': start_dt.isoformat(), 'timeZone': 'Asia/Jerusalem'},
+                        'end': {'dateTime': end_dt.isoformat(), 'timeZone': 'Asia/Jerusalem'},
+                    }
+                    service.events().insert(calendarId='primary', body=event).execute()
+                    added += 1
+                st.success(f"✅ {added} משמרות נוספו ללוז!")
+                st.session_state['detected_shifts'] = []
+            except Exception as e:
+                st.error(f"שגיאה: {e}")
