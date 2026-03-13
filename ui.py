@@ -13,7 +13,7 @@ SCOPES = [
 
 # --- שם: מייל ---
 FRIENDS = {
-    "חבר 1": "friend1@gmail.com",
+    "מיכאל": "michaelfruchter100@gmail.com",
     "חבר 2": "friend2@gmail.com",
     "עובדיה": "ovadiadaniel205@gmail.com",
 }
