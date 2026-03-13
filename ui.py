@@ -229,7 +229,7 @@ def create_calendar_event(service, mission, start_time, end_time, attendee_email
         sendUpdates='all'
     ).execute()
 
-def find_free_slots(service, duration, mission, search_start, search_end, max_results=3):
+def find_free_slots(service, duration, mission, search_start, search_end, max_results=7):
     """מוצא עד max_results חלונות פנויים."""
     is_poker = "פוקר" in mission.lower() or "poker" in mission.lower()
     min_people = get_min_people(mission)
@@ -304,8 +304,9 @@ def find_free_slots(service, duration, mission, search_start, search_end, max_re
 
         if free_count >= min_people:
             results.append((possible_start, potential_end, free_count, unavailable))
-            # קפוץ קדימה כדי למצוא אופציה הבאה שלא חופפת
-            possible_start = round_up_to_half_hour(potential_end)
+            # קפוץ ליום הבא כדי למצוא אופציה ביום אחר
+            next_day = possible_start.astimezone().replace(hour=8, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
+            possible_start = next_day.astimezone(datetime.timezone.utc)
             continue
 
         next_points = sorted(p for p in change_points if p > possible_start)
