@@ -2,4 +2,6 @@ streamlit
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
-anthropic
+google-genai
+Pillow
+extra-streamlit-components

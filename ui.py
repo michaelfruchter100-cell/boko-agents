@@ -1,6 +1,8 @@
 import os.path
 import datetime
+import json
 import streamlit as st
+import extra_streamlit_components as stx
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -40,7 +42,7 @@ ACTIVITY_DURATIONS = {
     "גיימינג": 3, "משחק": 3,
 }
 MILUIM_SHIFTS = [(6, 10), (10, 14), (14, 18), (18, 22), (22, 2), (2, 6)]
-AFTER_SHIFT_BUFFER = datetime.timedelta(minutes=45)
+AFTER_SHIFT_BUFFER = datetime.timedelta(minutes=30)
 BEFORE_SHIFT_BUFFER = datetime.timedelta(hours=1)
 
 ACTIVITY_ICONS = {
@@ -77,6 +79,93 @@ def get_credentials():
             st.stop()
     return creds
 
+def get_oauth_client_info():
+    if 'WEB_CLIENT_ID' in st.secrets:
+        return st.secrets['WEB_CLIENT_ID'], st.secrets['WEB_CLIENT_SECRET']
+    if 'GOOGLE_TOKEN' in st.secrets:
+        token_data = json.loads(st.secrets['GOOGLE_TOKEN'])
+        return token_data['client_id'], token_data['client_secret']
+    if os.path.exists('token.json'):
+        with open('token.json') as f:
+            token_data = json.load(f)
+        return token_data['client_id'], token_data['client_secret']
+    raise Exception("לא נמצא GOOGLE_TOKEN")
+
+def get_google_auth_url():
+    import urllib.parse
+    client_id, _ = get_oauth_client_info()
+    redirect_uri = st.secrets.get('REDIRECT_URI', 'http://localhost:8501')
+    params = {
+        'client_id': client_id,
+        'redirect_uri': redirect_uri,
+        'response_type': 'code',
+        'scope': ' '.join(SCOPES),
+        'access_type': 'offline',
+        'prompt': 'select_account consent',
+    }
+    return 'https://accounts.google.com/o/oauth2/auth?' + urllib.parse.urlencode(params)
+
+def exchange_code_for_creds(code):
+    import requests as req_lib, json
+    client_id, client_secret = get_oauth_client_info()
+    redirect_uri = st.secrets.get('REDIRECT_URI', 'http://localhost:8501')
+    resp = req_lib.post('https://oauth2.googleapis.com/token', data={
+        'code': code,
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'redirect_uri': redirect_uri,
+        'grant_type': 'authorization_code',
+    })
+    resp.raise_for_status()
+    token = resp.json()
+    creds = Credentials(
+        token=token['access_token'],
+        refresh_token=token.get('refresh_token'),
+        token_uri='https://oauth2.googleapis.com/token',
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=SCOPES,
+    )
+    return creds
+
+def get_user_email(creds):
+    import requests as req_lib
+    resp = req_lib.get('https://www.googleapis.com/oauth2/v2/userinfo',
+                       headers={'Authorization': f'Bearer {creds.token}'})
+    return resp.json().get('email', '') if resp.ok else ''
+
+def get_cookie_manager():
+    return stx.CookieManager(key="boko_cookies")
+
+def save_creds_to_cookie(cookie_manager, creds, email):
+    client_id, client_secret = get_oauth_client_info()
+    data = json.dumps({
+        'token': creds.token,
+        'refresh_token': creds.refresh_token,
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'email': email,
+    })
+    cookie_manager.set('boko_user', data, expires_at=datetime.datetime.now() + datetime.timedelta(days=30))
+
+def load_creds_from_cookie(cookie_manager):
+    raw = cookie_manager.get('boko_user')
+    if not raw:
+        return None, None
+    try:
+        data = json.loads(raw)
+        creds = Credentials(
+            token=data['token'],
+            refresh_token=data['refresh_token'],
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=data['client_id'],
+            client_secret=data['client_secret'],
+            scopes=SCOPES,
+        )
+        return creds, data.get('email', '')
+    except Exception:
+        return None, None
+
 def round_up_to_half_hour(dt):
     minutes = dt.minute
     if minutes == 0:
@@ -108,11 +197,16 @@ def get_activity_icon(mission):
     return "📌"
 
 def is_miluim_shift(slot_start, slot_end):
-    duration_h = (slot_end - slot_start).total_seconds() / 3600
-    if abs(duration_h - 4) > 0.25:
-        return False
     local_start = slot_start.astimezone()
-    return local_start.hour in [s for s, _ in MILUIM_SHIFTS]
+    local_end = slot_end.astimezone()
+    for s_start, s_end in MILUIM_SHIFTS:
+        # בדוק אם האירוע מתחיל בשעת משמרת ומסתיים בשעת סיום המשמרת (עם סבילות שעה)
+        if local_start.hour == s_start:
+            expected_end = s_end if s_end != 0 else 24
+            actual_end = local_end.hour if local_end.hour != 0 else 24
+            if abs(actual_end - expected_end) <= 1:
+                return True
+    return False
 
 def get_unavailability_reason(busy_slots, event_start, event_end):
     """מחזיר את סיבת אי-הזמינות, או None אם פנוי."""
@@ -231,49 +325,134 @@ def create_calendar_event(service, mission, start_time, end_time, attendee_email
 
 EVENING_ONLY = ["בירה", "בר", "פוקר", "poker", "מסעדה", "ארוחת ערב", "אוכל", "ארוחה", "מסיבה"]
 
-def analyze_shift_image(image_bytes, image_type, my_name):
-    """מנתח תמונת וואטסאפ ומחלץ משמרות מילואים."""
-    import anthropic
-    import base64
-    import json
-
-    api_key = st.secrets.get('ANTHROPIC_API_KEY', '')
-    if not api_key:
-        raise Exception("ANTHROPIC_API_KEY לא הוגדר ב-Secrets")
-
-    client = anthropic.Anthropic(api_key=api_key)
-    image_data = base64.standard_b64encode(image_bytes).decode('utf-8')
-    today = datetime.datetime.now()
-
-    response = client.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=1024,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": image_type, "data": image_data}
-                },
-                {
-                    "type": "text",
-                    "text": f"""זוהי תמונת מסך מוואטסאפ עם סידור משמרות מילואים.
-חלץ את כל המשמרות שמשובצות עבור "{my_name}".
+def build_shift_prompt(today):
+    return f"""זוהי הודעת וואטסאפ עם סידור משמרות מילואים. כל המשמרות בהודעה הן עבורי.
 השנה הנוכחית היא {today.year}.
+
+פורמט ההודעה:
+- כל משמרת מסומנת בכוכביות *...*
+- תאריך: "ביום [שם יום] DD.MM" או "בלילה שבין יום [יום] DD.MM ליום [יום] DD.MM"
+- שעות: "נתחיל ב-HH:MM, נסיים ב-HH:MM" (גם ללא מקף כמו "נתחיל ב2:00")
+- סוג: "גיחה כבדה" = משמרת רגילה, "טיסה בכוננות X'" = כוננות
+- עבור לילה שבין תאריכים - תאריך ההתחלה הוא הראשון מהשניים
+
 החזר JSON בלבד ללא טקסט נוסף:
 {{"shifts": [{{"date": "DD/MM/YYYY", "start_time": "HH:MM", "end_time": "HH:MM", "description": "תיאור"}}]}}
-אם אין משמרות עבור "{my_name}", החזר: {{"shifts": []}}"""
-                }
-            ]
-        }]
-    )
+אם אין משמרות, החזר: {{"shifts": []}}"""
 
-    text = response.content[0].text.strip()
+def parse_shifts_from_gemini(text):
+    import json
+    text = text.strip()
     if '```' in text:
         text = text.split('```')[1]
         if text.startswith('json'):
             text = text[4:]
     return json.loads(text.strip())
+
+def _gemini_post(url, body):
+    import requests, time
+    for attempt in range(3):
+        resp = requests.post(url, json=body)
+        if resp.status_code == 429:
+            time.sleep(5 * (attempt + 1))
+            continue
+        resp.raise_for_status()
+        return resp
+    resp.raise_for_status()
+    return resp
+
+def analyze_shift_image(image_bytes, image_type):
+    import base64
+    api_key = st.secrets.get('GEMINI_API_KEY', '')
+    if not api_key:
+        raise Exception("GEMINI_API_KEY לא הוגדר ב-Secrets")
+    today = datetime.datetime.now()
+    prompt = build_shift_prompt(today)
+    image_b64 = base64.b64encode(image_bytes).decode()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    body = {"contents": [{"parts": [
+        {"inline_data": {"mime_type": image_type, "data": image_b64}},
+        {"text": prompt}
+    ]}]}
+    resp = _gemini_post(url, body)
+    return parse_shifts_from_gemini(resp.json()['candidates'][0]['content']['parts'][0]['text'])
+
+def parse_shifts_from_text_regex(message_text):
+    """פרסר ישיר לפורמט הודעות וואטסאפ של סידור משמרות, ללא Gemini."""
+    import re
+    year = datetime.datetime.now().year
+    shifts = []
+
+    # חלץ כל בלוק משמרת (שורה שמוקפת בכוכביות + שורות תיאור אחריה)
+    blocks = re.split(r'\n(?=\*)', message_text.strip())
+
+    for block in blocks:
+        lines = block.strip().splitlines()
+        if not lines:
+            continue
+
+        header = lines[0].strip().strip('*')
+
+        # חלץ שעות
+        start_match = re.search(r'נתחיל ב[-]?(\d{1,2}:\d{2}|\d{1,2})', header)
+        end_match = re.search(r'נסיים ב[-]?(\d{1,2}:\d{2}|\d{1,2})', header)
+        if not start_match or not end_match:
+            continue
+
+        start_time = start_match.group(1)
+        end_time = end_match.group(1)
+        if ':' not in start_time:
+            start_time += ':00'
+        if ':' not in end_time:
+            end_time += ':00'
+
+        # תאריך לילה: "בלילה שבין יום X DD.MM ליום Y DD.MM"
+        night_match = re.search(r'בלילה שבין יום \S+ (\d{1,2})\.(\d{1,2})', header)
+        # תאריך רגיל: "ביום X DD.MM"
+        day_match = re.search(r'ביום \S+ (\d{1,2})\.(\d{1,2})', header)
+
+        if night_match:
+            day, month = night_match.group(1), night_match.group(2)
+        elif day_match:
+            day, month = day_match.group(1), day_match.group(2)
+        else:
+            continue
+
+        date_str = f"{int(day):02d}/{int(month):02d}/{year}"
+
+        # תיאור: השורה הראשונה אחרי הכותרת שאינה "מפקד" / "הערה"
+        description = "משמרת מילואים"
+        for line in lines[1:]:
+            l = line.strip()
+            if l and not l.startswith('מפקד') and not l.startswith('הערה') and not l.startswith('נא ל'):
+                description = l
+                break
+
+        shifts.append({
+            "date": date_str,
+            "start_time": start_time,
+            "end_time": end_time,
+            "description": description,
+        })
+
+    return {"shifts": shifts}
+
+def analyze_shift_text(message_text):
+    # נסה קודם פרסר ישיר
+    result = parse_shifts_from_text_regex(message_text)
+    if result.get('shifts'):
+        return result
+
+    # אם לא הצליח, נסה Gemini
+    api_key = st.secrets.get('GEMINI_API_KEY', '')
+    if not api_key:
+        raise Exception("לא זוהו משמרות בטקסט")
+    today = datetime.datetime.now()
+    prompt = build_shift_prompt(today) + f"\n\nהטקסט:\n{message_text}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    body = {"contents": [{"parts": [{"text": prompt}]}]}
+    resp = _gemini_post(url, body)
+    return parse_shifts_from_gemini(resp.json()['candidates'][0]['content']['parts'][0]['text'])
 
 def find_free_slots(service, duration, mission, search_start, search_end, max_results=21):
     """מוצא עד max_results חלונות פנויים."""
@@ -352,12 +531,18 @@ def find_free_slots(service, duration, mission, search_start, search_end, max_re
         free_count = 0
         for person in all_people:
             reason = get_unavailability_reason(busy_per_person[person], possible_start, potential_end)
+            # Fallback: miluim after-buffer check for "primary" (in case is_miluim_shift missed it)
+            if reason is None and person == "primary":
+                for rs, re_t in busy_per_person.get("primary", []):
+                    if is_miluim_shift(rs, re_t) and re_t <= possible_start < re_t + AFTER_SHIFT_BUFFER:
+                        reason = f"סיים משמרת ב-{re_t.astimezone().strftime('%H:%M')}, זמין מ-{(re_t + AFTER_SHIFT_BUFFER).astimezone().strftime('%H:%M')}"
+                        break
             if reason is None:
                 free_count += 1
             else:
                 unavailable[email_to_name[person]] = reason
 
-        if free_count >= min_people:
+        if free_count >= min_people and "אני" not in unavailable:
             results.append((possible_start, potential_end, free_count, unavailable))
             # קפוץ לאחרי האירוע למצוא אופציה נוספת באותו יום
             possible_start = round_up_to_half_hour(potential_end)
@@ -520,8 +705,9 @@ st.markdown("""
 # כרטיס חיפוש
 _, col, _ = st.columns([1, 10, 1])
 with col:
-    query = st.text_input("", placeholder="למשל: בירה לעוד שבועיים, פוקר שבוע הבא, כדורגל סוף השבוע...", label_visibility="collapsed")
-    search_btn = st.button("🔍  מצא זמן פנוי", type="primary", disabled=not query, use_container_width=True)
+    with st.form("search_form"):
+        query = st.text_input("", placeholder="למשל: בירה לעוד שבועיים, פוקר שבוע הבא, כדורגל סוף השבוע...", label_visibility="collapsed")
+        search_btn = st.form_submit_button("🔍  מצא זמן פנוי", type="primary", use_container_width=True)
 
 if search_btn:
     with st.spinner("סורק יומנים..."):
@@ -575,7 +761,9 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
                 start_time, end_time, free_count, unavailable = slot
                 i = slot_index[id(slot)]
                 time_str = f"{start_time.astimezone().strftime('%H:%M')}–{end_time.astimezone().strftime('%H:%M')}"
-                available_names = [name for name in FRIENDS if name not in unavailable] + ["אני"]
+                available_names = [name for name in FRIENDS if name not in unavailable]
+                if "אני" not in unavailable:
+                    available_names.append("אני")
                 names_str = "כולם" if len(unavailable) == 0 else ", ".join(available_names)
 
                 col1, col2, col3 = st.columns([1.5, 2.5, 1.5])
@@ -598,30 +786,126 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
     elif slots == []:
         st.markdown("<p style='color:#ff6b6b; text-align:center; font-size:1.1rem;'>❌ אין חלונות זמן רלוונטיים</p>", unsafe_allow_html=True)
 
+# ---- טיפול ב-OAuth callback ----
+PENDING_AUTH_FILE = '.pending_auth.json'
+
+params = st.query_params
+if 'code' in params and not st.session_state.get('_oauth_done'):
+    st.session_state['_oauth_done'] = True
+    code = params['code']
+    st.query_params.clear()
+    try:
+        creds = exchange_code_for_creds(code)
+        email = get_user_email(creds)
+        client_id, client_secret = get_oauth_client_info()
+        # שמור לקובץ זמני — עמיד בפני איפוס session
+        with open(PENDING_AUTH_FILE, 'w') as f:
+            json.dump({'token': creds.token, 'refresh_token': creds.refresh_token,
+                       'client_id': client_id, 'client_secret': client_secret, 'email': email}, f)
+        st.session_state['user_creds'] = creds
+        st.session_state['user_email'] = email
+    except Exception as e:
+        st.session_state.pop('_oauth_done', None)
+        st.session_state['_auth_error'] = str(e)
+
+# טעינה מקובץ זמני (אם session התאפס אחרי OAuth)
+if 'user_creds' not in st.session_state and not st.session_state.get('_logged_out') and os.path.exists(PENDING_AUTH_FILE):
+    try:
+        with open(PENDING_AUTH_FILE) as f:
+            data = json.load(f)
+        creds = Credentials(
+            token=data['token'], refresh_token=data['refresh_token'],
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=data['client_id'], client_secret=data['client_secret'], scopes=SCOPES,
+        )
+        st.session_state['user_creds'] = creds
+        st.session_state['user_email'] = data.get('email', '')
+    except Exception:
+        pass
+
+# טעינה אוטומטית מ-token.json (למשתמש המקומי)
+if 'user_creds' not in st.session_state and not st.session_state.get('_logged_out') and os.path.exists('token.json'):
+    try:
+        auto_creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        if auto_creds and auto_creds.expired and auto_creds.refresh_token:
+            auto_creds.refresh(Request())
+        if auto_creds and auto_creds.valid:
+            email_resp = __import__('requests').get(
+                'https://www.googleapis.com/oauth2/v2/userinfo',
+                headers={'Authorization': f'Bearer {auto_creds.token}'}
+            )
+            auto_email = email_resp.json().get('email', '') if email_resp.ok else ''
+            st.session_state['user_creds'] = auto_creds
+            st.session_state['user_email'] = auto_email
+    except Exception:
+        pass
+
+# Cookie manager (לצורך persistent login לחברים)
+cookie_manager = get_cookie_manager()
+
 # ---- סעיף העלאת סידור מילואים ----
 st.markdown("<hr style='border-color:rgba(255,255,255,0.1); margin:2rem 0;'>", unsafe_allow_html=True)
 st.markdown("""
 <div style='text-align:center; padding:0.5rem 0 1rem 0;'>
-    <span style='color:#7c4dff; font-size:1.2rem; font-weight:700;'>📸 העלה סידור משמרות מהוואטסאפ</span><br>
-    <span style='color:#8892a4; font-size:0.9rem;'>העלה צילום מסך ואני אזהה את המשמרות שלך ואוסיף ללוז</span>
+    <span style='color:#7c4dff; font-size:1.2rem; font-weight:700;'>🪖 ייבא משמרות מילואים</span><br>
+    <span style='color:#8892a4; font-size:0.9rem;'>הדבק את הטקסט מהוואטסאפ</span>
 </div>
 """, unsafe_allow_html=True)
 
-_, col_img, _ = st.columns([1, 10, 1])
-with col_img:
-    my_name = st.text_input("שמך כפי שמופיע בסידור", placeholder="לדוגמה: מיכאל, מיכי...", key="my_name_input")
-    uploaded_file = st.file_uploader("בחר תמונה", type=["jpg", "jpeg", "png"], key="shift_image")
+# ---- מצב התחברות ----
+if '_auth_error' in st.session_state:
+    st.error(f"שגיאת התחברות: {st.session_state['_auth_error']}")
 
-    if uploaded_file and my_name:
-        if st.button("🔍 נתח משמרות", type="primary", use_container_width=True, key="analyze_btn"):
-            with st.spinner("מנתח את הסידור..."):
-                try:
-                    image_bytes = uploaded_file.read()
-                    image_type = "image/jpeg" if uploaded_file.type == "image/jpeg" else "image/png"
-                    result = analyze_shift_image(image_bytes, image_type, my_name)
-                    st.session_state['detected_shifts'] = result.get('shifts', [])
-                except Exception as e:
-                    st.error(f"שגיאה בניתוח: {e}")
+if 'user_creds' in st.session_state:
+    email = st.session_state.get('user_email', '')
+    col_status, col_logout = st.columns([4, 1])
+    with col_status:
+        st.markdown(f"""
+        <div style='background:rgba(0,200,100,0.1); border:1px solid rgba(0,200,100,0.3);
+                    border-radius:10px; padding:0.6rem 1rem; text-align:center; direction:rtl;'>
+            ✅ <b style='color:#00c864;'>מחובר כ: {email}</b>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_logout:
+        if st.button("התנתק", key="logout_btn"):
+            del st.session_state['user_creds']
+            del st.session_state['user_email']
+            st.session_state.pop('detected_shifts', None)
+            st.session_state['_logged_out'] = True
+            if os.path.exists(PENDING_AUTH_FILE):
+                os.remove(PENDING_AUTH_FILE)
+            try:
+                cookie_manager.delete('boko_user')
+            except Exception:
+                pass
+            st.rerun()
+else:
+    auth_url = get_google_auth_url()
+    st.markdown(f"""
+    <div style='text-align:center; padding:0.3rem 0 0.8rem 0;'>
+        <div style='color:#8892a4; font-size:0.85rem; margin-bottom:0.5rem;'>
+            ⚠️ התחבר כדי שהמשמרות יתווספו ליומן שלך
+        </div>
+        <a href="{auth_url}" target="_self"
+           style='background:linear-gradient(135deg,#4fc3f7,#7c4dff); color:white;
+                  padding:0.6rem 1.5rem; border-radius:12px; font-weight:600;
+                  font-size:1rem; text-decoration:none; font-family:Heebo,sans-serif;'>
+            🔐 התחבר עם Google
+        </a>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ---- הזנת משמרות בטקסט ----
+with st.form("shift_text_form"):
+    msg_text = st.text_area("הדבק את הודעת הוואטסאפ כאן", height=200, placeholder="היי פרוכטר,\nיש מספר כוכביות:\n*ביום שלישי 17.03...*", key="shift_text")
+    analyze_text_btn = st.form_submit_button("🔍 נתח טקסט", type="primary", use_container_width=True)
+if analyze_text_btn and msg_text:
+    with st.spinner("מנתח את הסידור..."):
+        try:
+            result = analyze_shift_text(msg_text)
+            st.session_state['detected_shifts'] = result.get('shifts', [])
+        except Exception as e:
+            st.error(f"שגיאה בניתוח: {e}")
 
 if 'detected_shifts' in st.session_state and st.session_state['detected_shifts']:
     shifts = st.session_state['detected_shifts']
@@ -649,7 +933,7 @@ if 'detected_shifts' in st.session_state and st.session_state['detected_shifts']
     if st.button("📅 הוסף את כל המשמרות ללוז", type="primary", use_container_width=True, key="add_shifts_btn"):
         with st.spinner("מוסיף משמרות..."):
             try:
-                creds = get_credentials()
+                creds = st.session_state.get('user_creds') or get_credentials()
                 service = build('calendar', 'v3', credentials=creds)
                 added = 0
                 for shift in shifts:
@@ -664,8 +948,11 @@ if 'detected_shifts' in st.session_state and st.session_state['detected_shifts']
                                                 tzinfo=datetime.timezone(datetime.timedelta(hours=2)))
                     if end_dt <= start_dt:
                         end_dt += datetime.timedelta(days=1)
+                    desc = shift.get('description', '')
+                    is_standby = 'כוננות' in desc or 'כוננות' in shift.get('start_time', '')
+                    title = "🪖 מילואים כוננות" if is_standby else "🪖 מילואים"
                     event = {
-                        'summary': f"🪖 {shift.get('description','משמרת מילואים')}",
+                        'summary': title,
                         'start': {'dateTime': start_dt.isoformat(), 'timeZone': 'Asia/Jerusalem'},
                         'end': {'dateTime': end_dt.isoformat(), 'timeZone': 'Asia/Jerusalem'},
                     }
