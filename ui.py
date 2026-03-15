@@ -12,14 +12,13 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 SCOPES = [
-    'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/calendar.events',
 ]
 
 # --- שם: מייל ---
 FRIENDS = {
     "מיכאל": "michaelfruchter100@gmail.com",
-    "חבר 2": "friend2@gmail.com",
+    "בן": "benprash94@gmail.com",
     "עובדיה": "ovadiadaniel205@gmail.com",
 }
 
@@ -683,6 +682,17 @@ st.markdown("""
         color: #4fc3f7 !important;
     }
 
+    /* כפתור חיפוש ירוק */
+    .stFormSubmitButton > button[kind="primary"] {
+        background: #00c864 !important;
+        border-color: #00c864 !important;
+        color: white !important;
+    }
+    .stFormSubmitButton > button[kind="primary"]:hover {
+        background: #00a050 !important;
+        border-color: #00a050 !important;
+    }
+
     /* הסתר מרכיבי Streamlit מיותרים */
     #MainMenu, footer, header {visibility: hidden;}
     .block-container {padding-top: 0 !important; max-width: 720px;}
@@ -855,34 +865,10 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---- מצב התחברות ----
 if '_auth_error' in st.session_state:
     st.error(f"שגיאת התחברות: {st.session_state['_auth_error']}")
 
-if 'user_creds' in st.session_state:
-    email = st.session_state.get('user_email', '')
-    col_status, col_logout = st.columns([4, 1])
-    with col_status:
-        st.markdown(f"""
-        <div style='background:rgba(0,200,100,0.1); border:1px solid rgba(0,200,100,0.3);
-                    border-radius:10px; padding:0.6rem 1rem; text-align:center; direction:rtl;'>
-            ✅ <b style='color:#00c864;'>מחובר כ: {email}</b>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_logout:
-        if st.button("התנתק", key="logout_btn"):
-            del st.session_state['user_creds']
-            del st.session_state['user_email']
-            st.session_state.pop('detected_shifts', None)
-            st.session_state['_logged_out'] = True
-            if os.path.exists(PENDING_AUTH_FILE):
-                os.remove(PENDING_AUTH_FILE)
-            try:
-                cookie_manager.delete('boko_user')
-            except Exception:
-                pass
-            st.rerun()
-else:
+if 'user_creds' not in st.session_state:
     auth_url = get_google_auth_url()
     st.markdown(f"""
     <div style='text-align:center; padding:0.3rem 0 0.8rem 0;'>
@@ -965,3 +951,54 @@ if 'detected_shifts' in st.session_state and st.session_state['detected_shifts']
                 st.session_state['detected_shifts'] = []
             except Exception as e:
                 st.error(f"שגיאה: {e}")
+
+# ---- פס מחובר תחתון ----
+if 'user_creds' in st.session_state:
+    email = st.session_state.get('user_email', '')
+    st.markdown(f"""
+    <style>
+    .bottom-bar {{
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        background: rgba(18,18,28,0.95);
+        border-top: 1px solid rgba(0,200,100,0.3);
+        padding: 0.5rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        z-index: 9999;
+        direction: rtl;
+    }}
+    .bottom-bar-logout {{
+        background: transparent;
+        border: 1px solid rgba(255,100,100,0.4);
+        color: #ff6b6b;
+        border-radius: 8px;
+        padding: 0.3rem 0.9rem;
+        cursor: pointer;
+        font-family: Heebo, sans-serif;
+        font-size: 0.85rem;
+    }}
+    .bottom-bar-logout:hover {{ background: rgba(255,100,100,0.1); }}
+    </style>
+    <div class="bottom-bar">
+        <span style="color:white; font-family:Heebo,sans-serif;">✅ {"מחובר כ: " + email.strip() if email.strip() else "מחובר"}</span>
+        <form action="" method="get">
+            <button class="bottom-bar-logout" name="_logout" value="1" type="submit">התנתק</button>
+        </form>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.query_params.get("_logout") == "1":
+        del st.session_state['user_creds']
+        del st.session_state['user_email']
+        st.session_state.pop('detected_shifts', None)
+        st.session_state['_logged_out'] = True
+        if os.path.exists(PENDING_AUTH_FILE):
+            os.remove(PENDING_AUTH_FILE)
+        try:
+            cookie_manager.delete('boko_user')
+        except Exception:
+            pass
+        st.query_params.clear()
+        st.rerun()
