@@ -889,7 +889,7 @@ else:
         <div style='color:#8892a4; font-size:0.85rem; margin-bottom:0.5rem;'>
             ⚠️ התחבר כדי שהמשמרות יתווספו ליומן שלך
         </div>
-        <a href="{auth_url}" target="_self"
+        <a href="{auth_url}" target="_top"
            style='background:linear-gradient(135deg,#4fc3f7,#7c4dff); color:white;
                   padding:0.6rem 1.5rem; border-radius:12px; font-weight:600;
                   font-size:1rem; text-decoration:none; font-family:Heebo,sans-serif;'>
