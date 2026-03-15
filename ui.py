@@ -104,9 +104,9 @@ def get_google_auth_url():
         'response_type': 'code',
         'scope': ' '.join(SCOPES),
         'access_type': 'offline',
-        'prompt': 'consent',
+        'prompt': 'select_account consent',
     }
-    return 'https://accounts.google.com/o/oauth2/v2/auth?' + urllib.parse.urlencode(params)
+    return 'https://accounts.google.com/o/oauth2/auth?' + urllib.parse.urlencode(params)
 
 def exchange_code_for_creds(code):
     import requests as req_lib, json
