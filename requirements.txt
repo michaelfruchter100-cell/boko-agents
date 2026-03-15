@@ -5,3 +5,4 @@ google-auth-oauthlib
 google-genai
 Pillow
 extra-streamlit-components
+tzdata
