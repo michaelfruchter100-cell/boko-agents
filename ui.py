@@ -1,7 +1,10 @@
 import os.path
 import datetime
 import json
+from zoneinfo import ZoneInfo
 import streamlit as st
+
+ISRAEL_TZ = ZoneInfo('Asia/Jerusalem')
 import extra_streamlit_components as stx
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -197,8 +200,8 @@ def get_activity_icon(mission):
     return "📌"
 
 def is_miluim_shift(slot_start, slot_end):
-    local_start = slot_start.astimezone()
-    local_end = slot_end.astimezone()
+    local_start = slot_start.astimezone(ISRAEL_TZ)
+    local_end = slot_end.astimezone(ISRAEL_TZ)
     for s_start, s_end in MILUIM_SHIFTS:
         # בדוק אם האירוע מתחיל בשעת משמרת ומסתיים בשעת סיום המשמרת (עם סבילות שעה)
         if local_start.hour == s_start:
@@ -215,15 +218,15 @@ def get_unavailability_reason(busy_slots, event_start, event_end):
 
     for bs, be in regular:
         if max(event_start, bs) < min(event_end, be):
-            return f"אירוע אחר ({bs.astimezone().strftime('%H:%M')}–{be.astimezone().strftime('%H:%M')})"
+            return f"אירוע אחר ({bs.astimezone(ISRAEL_TZ).strftime('%H:%M')}–{be.astimezone(ISRAEL_TZ).strftime('%H:%M')})"
 
     for rs, re in miluim:
         if max(event_start, rs) < min(event_end, re):
-            return f"במשמרת מילואים ({rs.astimezone().strftime('%H:%M')}–{re.astimezone().strftime('%H:%M')})"
+            return f"במשמרת מילואים ({rs.astimezone(ISRAEL_TZ).strftime('%H:%M')}–{re.astimezone(ISRAEL_TZ).strftime('%H:%M')})"
         if re <= event_start and event_start < re + AFTER_SHIFT_BUFFER:
-            return f"סיים משמרת ב-{re.astimezone().strftime('%H:%M')}, צריך 45 דק׳ מנוחה"
+            return f"סיים משמרת ב-{re.astimezone(ISRAEL_TZ).strftime('%H:%M')}, צריך 45 דק׳ מנוחה"
         if rs >= event_end and event_end > rs - BEFORE_SHIFT_BUFFER:
-            return f"משמרת מתחילה ב-{rs.astimezone().strftime('%H:%M')}, צריך לצאת שעה לפני"
+            return f"משמרת מתחילה ב-{rs.astimezone(ISRAEL_TZ).strftime('%H:%M')}, צריך לצאת שעה לפני"
 
     return None
 
@@ -231,7 +234,7 @@ def parse_time_range(when_text):
     """מפרסר טקסט חופשי לטווח זמן חיפוש."""
     import re
     now = datetime.datetime.now(datetime.timezone.utc)
-    local_now = now.astimezone()
+    local_now = now.astimezone(ISRAEL_TZ)
     t = when_text.strip()
 
     def local_to_utc(dt):
@@ -495,7 +498,7 @@ def find_free_slots(service, duration, mission, search_start, search_end, max_re
     possible_start = round_up_to_half_hour(search_start)
 
     while possible_start + datetime.timedelta(hours=duration) <= search_end and len(results) < max_results:
-        local_start = possible_start.astimezone()
+        local_start = possible_start.astimezone(ISRAEL_TZ)
 
         # פעילויות ערב רק אחרי 18:00
         if is_evening_only and local_start.hour < 18:
@@ -514,7 +517,7 @@ def find_free_slots(service, duration, mission, search_start, search_end, max_re
         potential_end = possible_start + datetime.timedelta(hours=duration)
 
         # אירוע לא יכול להסתיים אחרי 01:00 בלילה
-        local_end = potential_end.astimezone()
+        local_end = potential_end.astimezone(ISRAEL_TZ)
         if 1 <= local_end.hour < 8:
             next_day = (local_start + datetime.timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
             possible_start = next_day.astimezone(datetime.timezone.utc)
@@ -535,7 +538,7 @@ def find_free_slots(service, duration, mission, search_start, search_end, max_re
             if reason is None and person == "primary":
                 for rs, re_t in busy_per_person.get("primary", []):
                     if is_miluim_shift(rs, re_t) and re_t <= possible_start < re_t + AFTER_SHIFT_BUFFER:
-                        reason = f"סיים משמרת ב-{re_t.astimezone().strftime('%H:%M')}, זמין מ-{(re_t + AFTER_SHIFT_BUFFER).astimezone().strftime('%H:%M')}"
+                        reason = f"סיים משמרת ב-{re_t.astimezone(ISRAEL_TZ).strftime('%H:%M')}, זמין מ-{(re_t + AFTER_SHIFT_BUFFER).astimezone(ISRAEL_TZ).strftime('%H:%M')}"
                         break
             if reason is None:
                 free_count += 1
@@ -741,12 +744,12 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
         days_dict = defaultdict(list)
         slot_index = {}
         for i, slot in enumerate(slots, 1):
-            day_key = slot[0].astimezone().strftime('%Y-%m-%d')
+            day_key = slot[0].astimezone(ISRAEL_TZ).strftime('%Y-%m-%d')
             days_dict[day_key].append(slot)
             slot_index[id(slot)] = i
 
         for day_key, day_slots in days_dict.items():
-            local_start = day_slots[0][0].astimezone()
+            local_start = day_slots[0][0].astimezone(ISRAEL_TZ)
             day_name = HEB_DAYS[local_start.weekday()]
             date_str = local_start.strftime('%d/%m')
 
@@ -760,7 +763,7 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
             for slot in day_slots:
                 start_time, end_time, free_count, unavailable = slot
                 i = slot_index[id(slot)]
-                time_str = f"{start_time.astimezone().strftime('%H:%M')}–{end_time.astimezone().strftime('%H:%M')}"
+                time_str = f"{start_time.astimezone(ISRAEL_TZ).strftime('%H:%M')}–{end_time.astimezone(ISRAEL_TZ).strftime('%H:%M')}"
                 available_names = [name for name in FRIENDS if name not in unavailable]
                 if "אני" not in unavailable:
                     available_names.append("אני")
@@ -775,7 +778,7 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
                     available_emails = [email for name, email in FRIENDS.items() if name not in unavailable]
                     if st.button(f"📨 זמן", key=f"invite_{i}"):
                         try:
-                            creds = get_credentials()
+                            creds = st.session_state.get('user_creds') or get_credentials()
                             service = build('calendar', 'v3', credentials=creds)
                             event = create_calendar_event(service, mission, start_time, end_time, available_emails)
                             st.success(f"✅ זימון נשלח ל-{len(available_emails)} אנשים!")
