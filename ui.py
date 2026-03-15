@@ -834,6 +834,10 @@ if 'user_creds' not in st.session_state and not st.session_state.get('_logged_ou
         )
         st.session_state['user_creds'] = creds
         st.session_state['user_email'] = data.get('email', '')
+        try:
+            os.remove(PENDING_AUTH_FILE)
+        except Exception:
+            pass
     except Exception:
         pass
 
