@@ -800,9 +800,10 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
     elif slots == []:
         st.markdown("<p style='color:#ff6b6b; text-align:center; font-size:1.1rem;'>❌ אין חלונות זמן רלוונטיים</p>", unsafe_allow_html=True)
 
-# ---- טיפול ב-OAuth callback ----
-PENDING_AUTH_FILE = '.pending_auth.json'
+# Cookie manager (כל משתמש שומר בדפדפן שלו — לא על השרת)
+cookie_manager = get_cookie_manager()
 
+# ---- טיפול ב-OAuth callback ----
 params = st.query_params
 if 'code' in params and not st.session_state.get('_oauth_done'):
     st.session_state['_oauth_done'] = True
@@ -811,37 +812,21 @@ if 'code' in params and not st.session_state.get('_oauth_done'):
     try:
         creds = exchange_code_for_creds(code)
         email = get_user_email(creds)
-        client_id, client_secret = get_oauth_client_info()
-        # שמור לקובץ זמני — עמיד בפני איפוס session
-        with open(PENDING_AUTH_FILE, 'w') as f:
-            json.dump({'token': creds.token, 'refresh_token': creds.refresh_token,
-                       'client_id': client_id, 'client_secret': client_secret, 'email': email}, f)
         st.session_state['user_creds'] = creds
         st.session_state['user_email'] = email
+        save_creds_to_cookie(cookie_manager, creds, email)
     except Exception as e:
         st.session_state.pop('_oauth_done', None)
         st.session_state['_auth_error'] = str(e)
 
-# טעינה מקובץ זמני (אם session התאפס אחרי OAuth)
-if 'user_creds' not in st.session_state and not st.session_state.get('_logged_out') and os.path.exists(PENDING_AUTH_FILE):
-    try:
-        with open(PENDING_AUTH_FILE) as f:
-            data = json.load(f)
-        creds = Credentials(
-            token=data['token'], refresh_token=data['refresh_token'],
-            token_uri='https://oauth2.googleapis.com/token',
-            client_id=data['client_id'], client_secret=data['client_secret'], scopes=SCOPES,
-        )
-        st.session_state['user_creds'] = creds
-        st.session_state['user_email'] = data.get('email', '')
-        try:
-            os.remove(PENDING_AUTH_FILE)
-        except Exception:
-            pass
-    except Exception:
-        pass
+# טעינה מ-cookie (פר-משתמש, בדפדפן שלו)
+if 'user_creds' not in st.session_state and not st.session_state.get('_logged_out'):
+    cookie_creds, cookie_email = load_creds_from_cookie(cookie_manager)
+    if cookie_creds:
+        st.session_state['user_creds'] = cookie_creds
+        st.session_state['user_email'] = cookie_email
 
-# טעינה אוטומטית מ-token.json (למשתמש המקומי)
+# טעינה אוטומטית מ-token.json (למשתמש המקומי בלבד)
 if 'user_creds' not in st.session_state and not st.session_state.get('_logged_out') and os.path.exists('token.json'):
     try:
         auto_creds = Credentials.from_authorized_user_file('token.json', SCOPES)
@@ -857,9 +842,6 @@ if 'user_creds' not in st.session_state and not st.session_state.get('_logged_ou
             st.session_state['user_email'] = auto_email
     except Exception:
         pass
-
-# Cookie manager (לצורך persistent login לחברים)
-cookie_manager = get_cookie_manager()
 
 # ---- סעיף העלאת סידור מילואים ----
 st.markdown("<hr style='border-color:rgba(255,255,255,0.1); margin:2rem 0;'>", unsafe_allow_html=True)
@@ -999,8 +981,6 @@ if 'user_creds' in st.session_state:
         del st.session_state['user_email']
         st.session_state.pop('detected_shifts', None)
         st.session_state['_logged_out'] = True
-        if os.path.exists(PENDING_AUTH_FILE):
-            os.remove(PENDING_AUTH_FILE)
         try:
             cookie_manager.delete('boko_user')
         except Exception:
