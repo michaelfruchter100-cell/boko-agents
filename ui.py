@@ -848,8 +848,9 @@ if 'pending_invite' in st.session_state:
         if st.button("❌ ביטול", use_container_width=True):
             del st.session_state['pending_invite']
             st.rerun()
-    elif slots == []:
-        st.markdown("<p style='color:#ff6b6b; text-align:center; font-size:1.1rem;'>❌ אין חלונות זמן רלוונטיים</p>", unsafe_allow_html=True)
+
+if st.session_state.get('results') == []:
+    st.markdown("<p style='color:#ff6b6b; text-align:center; font-size:1.1rem;'>❌ אין חלונות זמן רלוונטיים</p>", unsafe_allow_html=True)
 
 # Cookie manager (כל משתמש שומר בדפדפן שלו — לא על השרת)
 cookie_manager = get_cookie_manager()
