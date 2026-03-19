@@ -175,8 +175,12 @@ def round_up_to_half_hour(dt):
     minutes = dt.minute
     if minutes == 0:
         return dt.replace(second=0, microsecond=0)
+    elif minutes <= 15:
+        return dt.replace(minute=15, second=0, microsecond=0)
     elif minutes <= 30:
         return dt.replace(minute=30, second=0, microsecond=0)
+    elif minutes <= 45:
+        return dt.replace(minute=45, second=0, microsecond=0)
     else:
         return (dt + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
 
@@ -513,9 +517,7 @@ def find_free_slots(service, duration, mission, search_start, search_end, max_re
         for s, e in slots:
             change_points.add(round_up_to_half_hour(s))
             change_points.add(round_up_to_half_hour(e))
-            if is_miluim_shift(s, e):
-                change_points.add(round_up_to_half_hour(e + AFTER_SHIFT_BUFFER))
-                change_points.add(round_up_to_half_hour(s - BEFORE_SHIFT_BUFFER))
+            change_points.add(round_up_to_half_hour(e + AFTER_SHIFT_BUFFER))
 
     results = []
     possible_start = round_up_to_half_hour(search_start)
