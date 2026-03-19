@@ -19,7 +19,6 @@ SCOPES = [
 # --- שם: מייל ---
 FRIENDS = {
     "מיכאל": "michaelfruchter100@gmail.com",
-    "בן": "benprash94@gmail.com",
     "עובדיה": "ovadiadaniel205@gmail.com",
 }
 
@@ -292,25 +291,37 @@ def parse_time_range(when_text):
     return now, now + datetime.timedelta(days=3)
 
 
+def parse_query_with_gemini(query):
+    """מפרסר שאילתה חופשית עם Gemini — מחזיר (mission, when_text, duration)."""
+    api_key = st.secrets.get('GEMINI_API_KEY', '')
+    if not api_key:
+        return query.strip(), query.lower(), None
+    today = datetime.datetime.now(ISRAEL_TZ).strftime('%Y-%m-%d')
+    prompt = f"""היום: {today}
+המשתמש כתב: "{query}"
+
+חלץ מהטקסט:
+1. activity - תיאור קצר של הפעילות בעברית (לדוגמה: "בירה", "דייט", "כדורגל", "ארוחת ערב")
+2. when - תיאור הזמן בעברית בלבד (לדוגמה: "שבוע הבא", "מחר", "סוף השבוע", "עוד שבועיים")
+3. duration_hours - משך הפעילות בשעות כמספר עשרוני. אם לא צוין במפורש, הסק לפי הפעילות (בירה=2, ארוחה=1.5, כדורגל=2, פוקר=4, קפה=1, דייט=2). אם צוין במפורש (כמו "שלוש שעות", "שעה וחצי") — השתמש בזה.
+
+החזר JSON בלבד ללא שום טקסט נוסף:
+{{"activity": "...", "when": "...", "duration_hours": 2.0}}"""
+
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        resp = _gemini_post(url, {"contents": [{"parts": [{"text": prompt}]}]})
+        text = resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+        text = text.replace('```json', '').replace('```', '').strip()
+        data = __import__('json').loads(text)
+        duration = float(data.get('duration_hours', 2.0))
+        return data.get('activity', query.strip()), data.get('when', query.lower()), duration
+    except Exception:
+        return query.strip(), query.lower(), None
+
 def parse_query(query):
-    """מחלץ פעילות וטווח זמן מטקסט חופשי כמו 'בירה לעוד שבועיים'."""
-    query_lower = query.lower().strip()
-    # כל מילות המפתח לפעילויות, ממויינות מהארוכה לקצרה למניעת התאמה חלקית
-    all_keywords = sorted(
-        list(ACTIVITY_DURATIONS.keys()) + list(ACTIVITY_ICONS.keys()),
-        key=lambda x: -len(x)
-    )
-    mission = None
-    when_text = query_lower
-    for kw in all_keywords:
-        if kw in query_lower:
-            mission = kw
-            when_text = query_lower.replace(kw, '').strip(' ,.-לב')
-            break
-    if mission is None:
-        mission = query.strip()
-        when_text = ""
-    return mission, when_text
+    """מחלץ פעילות, טווח זמן ומשך — משתמש ב-Gemini לטקסט חופשי."""
+    return parse_query_with_gemini(query)
 
 def create_calendar_event(service, mission, start_time, end_time, attendee_emails):
     """יוצר אירוע ב-Google Calendar ושולח זימון לכל המשתתפים."""
@@ -729,8 +740,8 @@ with col:
 if search_btn:
     with st.spinner("סורק יומנים..."):
         try:
-            mission, when_text = parse_query(query)
-            duration = get_duration(mission)
+            mission, when_text, gemini_duration = parse_query(query)
+            duration = gemini_duration if gemini_duration else get_duration(mission)
             search_start, search_end = parse_time_range(when_text or "")
             creds = get_credentials()
             service = build('calendar', 'v3', credentials=creds)
@@ -791,18 +802,52 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
                 with col3:
                     available_emails = [email for name, email in FRIENDS.items() if name not in unavailable]
                     if st.button(f"📨 זמן", key=f"invite_{i}"):
-                        try:
-                            if 'user_creds' not in st.session_state:
-                                st.error("יש להתחבר עם Google תחילה")
-                                st.stop()
-                            creds = st.session_state['user_creds']
-                            service = build('calendar', 'v3', credentials=creds)
-                            event = create_calendar_event(service, mission, start_time, end_time, available_emails)
-                            st.success(f"✅ זימון נשלח ל-{len(available_emails)} אנשים!")
-                            st.markdown(f"[פתח ב-Google Calendar]({event.get('htmlLink')})")
-                            st.session_state['results'] = None
-                        except Exception as e:
-                            st.error(f"שגיאה: {e}")
+                        st.session_state['pending_invite'] = {
+                            'mission': mission,
+                            'start': start_time,
+                            'end': end_time,
+                            'emails': available_emails,
+                            'names': [n for n in FRIENDS if n not in unavailable],
+                        }
+                        st.rerun()
+
+# אישור לפני זימון
+if 'pending_invite' in st.session_state:
+    inv = st.session_state['pending_invite']
+    start_local = inv['start'].astimezone(ISRAEL_TZ)
+    end_local = inv['end'].astimezone(ISRAEL_TZ)
+    date_str = start_local.strftime('%A, %d/%m')
+    time_str = f"{start_local.strftime('%H:%M')}–{end_local.strftime('%H:%M')}"
+    names_str = ', '.join(inv['names'])
+    st.markdown(f"""
+    <div style='background:rgba(79,195,247,0.1); border:1px solid rgba(79,195,247,0.4);
+                border-radius:12px; padding:1rem 1.5rem; margin:1rem 0; direction:rtl;'>
+        <div style='font-size:1.1rem; font-weight:700; color:#4fc3f7; margin-bottom:0.5rem;'>📨 אישור שליחת זימון</div>
+        <div style='color:#e0e0e0;'>📅 {date_str} · {time_str}</div>
+        <div style='color:#e0e0e0;'>🎯 {inv['mission']}</div>
+        <div style='color:#00c864;'>👥 {names_str}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button("✅ שלח זימון", type="primary", use_container_width=True):
+            try:
+                if 'user_creds' not in st.session_state:
+                    st.error("יש להתחבר עם Google תחילה")
+                    st.stop()
+                creds = st.session_state['user_creds']
+                service = build('calendar', 'v3', credentials=creds)
+                event = create_calendar_event(service, inv['mission'], inv['start'], inv['end'], inv['emails'])
+                st.success(f"✅ זימון נשלח ל-{len(inv['emails'])} אנשים!")
+                st.markdown(f"[פתח ב-Google Calendar]({event.get('htmlLink')})")
+                del st.session_state['pending_invite']
+                st.session_state['results'] = None
+            except Exception as e:
+                st.error(f"שגיאה: {e}")
+    with col_no:
+        if st.button("❌ ביטול", use_container_width=True):
+            del st.session_state['pending_invite']
+            st.rerun()
     elif slots == []:
         st.markdown("<p style='color:#ff6b6b; text-align:center; font-size:1.1rem;'>❌ אין חלונות זמן רלוונטיים</p>", unsafe_allow_html=True)
 
