@@ -95,9 +95,11 @@ def get_oauth_client_info():
     raise Exception("לא נמצא GOOGLE_TOKEN")
 
 def get_google_auth_url():
-    import urllib.parse
+    import urllib.parse, secrets
     client_id, _ = get_oauth_client_info()
     redirect_uri = st.secrets.get('REDIRECT_URI', 'http://localhost:8501')
+    state = secrets.token_urlsafe(16)
+    st.session_state['_oauth_state'] = state
     params = {
         'client_id': client_id,
         'redirect_uri': redirect_uri,
@@ -105,6 +107,7 @@ def get_google_auth_url():
         'scope': ' '.join(SCOPES),
         'access_type': 'offline',
         'prompt': 'select_account consent',
+        'state': state,
     }
     return 'https://accounts.google.com/o/oauth2/auth?' + urllib.parse.urlencode(params)
 
@@ -789,7 +792,10 @@ if 'results' in st.session_state and st.session_state['results'] is not None:
                     available_emails = [email for name, email in FRIENDS.items() if name not in unavailable]
                     if st.button(f"📨 זמן", key=f"invite_{i}"):
                         try:
-                            creds = st.session_state.get('user_creds') or get_credentials()
+                            if 'user_creds' not in st.session_state:
+                                st.error("יש להתחבר עם Google תחילה")
+                                st.stop()
+                            creds = st.session_state['user_creds']
                             service = build('calendar', 'v3', credentials=creds)
                             event = create_calendar_event(service, mission, start_time, end_time, available_emails)
                             st.success(f"✅ זימון נשלח ל-{len(available_emails)} אנשים!")
@@ -819,7 +825,7 @@ if 'code' in params and not st.session_state.get('_oauth_done'):
         st.session_state.pop('_oauth_done', None)
         st.session_state['_auth_error'] = str(e)
 
-# טעינה מ-cookie (פר-משתמש, בדפדפן שלו)
+# טעינה מ-cookie (פר-דפדפן, לא משותף בין משתמשים)
 if 'user_creds' not in st.session_state and not st.session_state.get('_logged_out'):
     cookie_creds, cookie_email = load_creds_from_cookie(cookie_manager)
     if cookie_creds:
@@ -909,7 +915,10 @@ if 'detected_shifts' in st.session_state and st.session_state['detected_shifts']
     if st.button("📅 הוסף את כל המשמרות ללוז", type="primary", use_container_width=True, key="add_shifts_btn"):
         with st.spinner("מוסיף משמרות..."):
             try:
-                creds = st.session_state.get('user_creds') or get_credentials()
+                if 'user_creds' not in st.session_state:
+                    st.error("יש להתחבר עם Google תחילה כדי להוסיף משמרות")
+                    st.stop()
+                creds = st.session_state['user_creds']
                 service = build('calendar', 'v3', credentials=creds)
                 added = 0
                 for shift in shifts:
