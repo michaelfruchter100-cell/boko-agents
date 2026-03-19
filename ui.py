@@ -357,10 +357,10 @@ def parse_shifts_from_gemini(text):
 
 def _gemini_post(url, body):
     import requests, time
-    for attempt in range(3):
+    for attempt in range(5):
         resp = requests.post(url, json=body)
         if resp.status_code == 429:
-            time.sleep(5 * (attempt + 1))
+            time.sleep(15 * (attempt + 1))
             continue
         resp.raise_for_status()
         return resp
