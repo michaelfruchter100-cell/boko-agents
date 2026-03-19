@@ -320,8 +320,17 @@ def parse_query_with_gemini(query):
         return query.strip(), query.lower(), None
 
 def parse_query(query):
-    """מחלץ פעילות, טווח זמן ומשך — משתמש ב-Gemini לטקסט חופשי."""
-    return parse_query_with_gemini(query)
+    """מחלץ פעילות וטווח זמן — מהיר, ללא Gemini."""
+    query_lower = query.lower().strip()
+    all_keywords = sorted(
+        list(ACTIVITY_DURATIONS.keys()) + list(ACTIVITY_ICONS.keys()),
+        key=lambda x: -len(x)
+    )
+    for kw in all_keywords:
+        if kw in query_lower:
+            when_text = query_lower.replace(kw, '').strip(' ,.-לב')
+            return kw, when_text, None
+    return query.strip(), query_lower, None
 
 def create_calendar_event(service, mission, start_time, end_time, attendee_emails):
     """יוצר אירוע ב-Google Calendar ושולח זימון לכל המשתתפים."""
